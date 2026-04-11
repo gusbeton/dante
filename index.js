@@ -9,144 +9,186 @@ const {
   ButtonStyle,
   ModalBuilder,
   TextInputBuilder,
-  TextInputStyle
+  TextInputStyle,
+  AttachmentBuilder
 } = require("discord.js");
 
+const { createCanvas, loadImage } = require("canvas");
+const fs = require("fs");
+const path = require("path");
+
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  intents: [GatewayIntentBits.Guilds]
 });
 
-// ======================
-// READY
-// ======================
-client.once("ready", () => {
-  console.log(`✅ Bot nyala: ${client.user.tag}`);
+const dbPath = "./database.json";
+
+// ================= DATABASE =================
+function loadDB() {
+  return JSON.parse(fs.readFileSync(dbPath));
+}
+
+function saveDB(data) {
+  fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
+}
+
+// ================= READY =================
+client.once("ready", async () => {
+  console.log(`✅ ${client.user.tag} aktif`);
+
+  const channel = await client.channels.fetch("1492441547583524954");
+
+  const embed = new EmbedBuilder()
+    .setColor("#2b2d31")
+    .setTitle("📄 BETLEHEM KTP")
+    .setDescription("BETLEHEM • Klik tombol untuk membuat atau melihat KTP kamu")
+    .setImage("https://media.discordapp.net/attachments/1487590787284734143/1490793378265305289/Black_White_Bold_Creative_Portfolio_Presentation.jpg?ex=69db47c6&is=69d9f646&hm=30bbfc95f2efbfe824564b7c07cc0847a1732e1313f070af8d9ae231668216ae&=&format=webp&width=1522&height=856"); // preview background
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("buat_ktp")
+      .setLabel("Buat / Lihat KTP")
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  await channel.send({
+    embeds: [embed],
+    components: [row]
+  });
 });
 
-// ======================
-// COMMAND PANEL
-// ======================
-client.on("messageCreate", async (message) => {
-  if (message.content === "!panelktp") {
-
-    const embed = new EmbedBuilder()
-      .setColor("#2b2d31")
-      .setTitle("📄 Kartu Tanda Penduduk")
-      .setDescription("GANG DESA • Klik tombol di bawah untuk membuat KTP");
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("buat_ktp")
-        .setLabel("Buat KTP")
-        .setStyle(ButtonStyle.Primary)
-    );
-
-    message.channel.send({
-      embeds: [embed],
-      components: [row]
-    });
-  }
-});
-
-// ======================
-// BUTTON → MODAL
-// ======================
+// ================= INTERACTION =================
 client.on("interactionCreate", async (interaction) => {
 
+  // ================= BUTTON =================
   if (interaction.isButton()) {
     if (interaction.customId === "buat_ktp") {
 
+      const db = loadDB();
+
+      // kalau sudah punya KTP
+      if (db[interaction.user.id]) {
+
+        const buffer = await generateKTP(interaction.user, db[interaction.user.id]);
+        const file = new AttachmentBuilder(buffer, { name: "ktp.png" });
+
+        return interaction.reply({
+          content: "📄 Ini KTP kamu yang sudah dibuat:",
+          files: [file],
+          ephemeral: true
+        });
+      }
+
+      // kalau belum → buka modal
       const modal = new ModalBuilder()
         .setCustomId("modal_ktp")
         .setTitle("Isi Data KTP Kamu");
 
-      const nama = new TextInputBuilder()
-        .setCustomId("nama")
-        .setLabel("Nama Lengkap")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+      const fields = ["nama", "kelamin", "domisili", "agama", "hobi"];
+      const labels = ["Nama", "Jenis Kelamin", "Domisili", "Agama", "Hobi"];
 
-      const kelamin = new TextInputBuilder()
-        .setCustomId("kelamin")
-        .setLabel("Jenis Kelamin")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const domisili = new TextInputBuilder()
-        .setCustomId("domisili")
-        .setLabel("Domisili")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const agama = new TextInputBuilder()
-        .setCustomId("agama")
-        .setLabel("Agama")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const hobi = new TextInputBuilder()
-        .setCustomId("hobi")
-        .setLabel("Hobi")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(nama),
-        new ActionRowBuilder().addComponents(kelamin),
-        new ActionRowBuilder().addComponents(domisili),
-        new ActionRowBuilder().addComponents(agama),
-        new ActionRowBuilder().addComponents(hobi)
-      );
+      fields.forEach((id, i) => {
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId(id)
+              .setLabel(labels[i])
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+          )
+        );
+      });
 
       await interaction.showModal(modal);
     }
   }
 
-  // ======================
-  // MODAL SUBMIT → KTP
-  // ======================
+  // ================= MODAL =================
   if (interaction.isModalSubmit()) {
     if (interaction.customId === "modal_ktp") {
 
-      const nama = interaction.fields.getTextInputValue("nama");
-      const kelamin = interaction.fields.getTextInputValue("kelamin");
-      const domisili = interaction.fields.getTextInputValue("domisili");
-      const agama = interaction.fields.getTextInputValue("agama");
-      const hobi = interaction.fields.getTextInputValue("hobi");
+      const db = loadDB();
 
-      const ktp = new EmbedBuilder()
+      const data = {
+        nama: interaction.fields.getTextInputValue("nama"),
+        kelamin: interaction.fields.getTextInputValue("kelamin"),
+        domisili: interaction.fields.getTextInputValue("domisili"),
+        agama: interaction.fields.getTextInputValue("agama"),
+        hobi: interaction.fields.getTextInputValue("hobi")
+      };
+
+      // simpan ke database
+      db[interaction.user.id] = data;
+      saveDB(db);
+
+      const buffer = await generateKTP(interaction.user, data);
+      const file = new AttachmentBuilder(buffer, { name: "ktp.png" });
+
+      const embed = new EmbedBuilder()
         .setColor("#2b2d31")
-        .setAuthor({
-          name: `KTP • ${interaction.user.username}`,
-          iconURL: interaction.user.displayAvatarURL({ dynamic: true })
-        })
-        .setDescription(`
-\`\`\`yaml
-KARTU TANDA PENDUDUK
-GANG DESA
-━━━━━━━━━━━━━━━━━━━━
-Nama          : ${nama}
-Jenis Kelamin : ${kelamin}
-Domisili      : ${domisili}
-Agama         : ${agama}
-Hobi          : ${hobi}
-━━━━━━━━━━━━━━━━━━━━
-\`\`\`
-`)
-        .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 512 }))
-        .setFooter({ text: "KTP Digital • Premium System" })
-        .setTimestamp();
+        .setTitle(`📄 Kartu Tanda Penduduk milik ${interaction.user.username}`)
+        .setDescription("GANG DESA • Data berhasil disimpan")
+        .setImage("attachment://ktp.png");
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("buat_ktp")
+          .setLabel("Lihat / Buat KTP")
+          .setStyle(ButtonStyle.Primary)
+      );
 
       await interaction.reply({
-        embeds: [ktp],
-        ephemeral: false
+        embeds: [embed],
+        files: [file],
+        components: [row]
       });
     }
   }
 
 });
 
-// ======================
-// LOGIN
-// ======================
+// ================= CANVAS =================
+async function generateKTP(user, data) {
+  const canvas = createCanvas(800, 450);
+  const ctx = canvas.getContext("2d");
+
+  const bg = await loadImage(path.join(__dirname, "assets/ktp-bg.png"));
+  ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "#000";
+  ctx.font = "bold 24px Arial";
+  ctx.fillText("KARTU TANDA PENDUDUK", 200, 50);
+  ctx.fillText("GANG DESA", 300, 80);
+
+  ctx.font = "18px Arial";
+
+  const fields = [
+    ["No KTP", Math.floor(Math.random()*9999999999999999)],
+    ["Nama", data.nama],
+    ["Jenis Kelamin", data.kelamin],
+    ["Domisili", data.domisili],
+    ["Agama", data.agama],
+    ["Hobi", data.hobi]
+  ];
+
+  let y = 140;
+  fields.forEach(([k, v]) => {
+    ctx.fillText(k, 80, y);
+    ctx.fillText(":", 260, y);
+    ctx.fillText(v, 280, y);
+    y += 40;
+  });
+
+  const avatar = await loadImage(
+    user.displayAvatarURL({ extension: "png", size: 256 })
+  );
+  ctx.drawImage(avatar, 550, 140, 150, 180);
+
+  ctx.font = "14px Arial";
+  ctx.fillText("Tanggal:", 550, 340);
+  ctx.fillText(new Date().toLocaleDateString("id-ID"), 550, 365);
+
+  return canvas.toBuffer();
+}
+
 client.login(process.env.TOKEN);
