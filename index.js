@@ -13,9 +13,14 @@ const {
   AttachmentBuilder
 } = require("discord.js");
 
-const { createCanvas, loadImage } = require("canvas");
+const { createCanvas, loadImage, registerFont } = require("canvas");
 const fs = require("fs");
 const path = require("path");
+
+// ===== REGISTER FONT =====
+registerFont(path.join(__dirname, "assets/Roboto-Bold.ttf"), {
+  family: "Roboto"
+});
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -23,7 +28,7 @@ const client = new Client({
 
 const dbPath = "./database.json";
 
-// ================= DATABASE =================
+// ===== DATABASE =====
 function loadDB() {
   return JSON.parse(fs.readFileSync(dbPath));
 }
@@ -31,7 +36,7 @@ function saveDB(data) {
   fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
 }
 
-// ================= READY =================
+// ===== READY =====
 client.once("ready", async () => {
   console.log(`✅ ${client.user.tag} aktif`);
 
@@ -41,7 +46,7 @@ client.once("ready", async () => {
     .setColor("#2b2d31")
     .setTitle("📄 BETLEHEM KTP")
     .setDescription("BETLEHEM • Klik tombol untuk membuat atau melihat KTP kamu")
-    .setImage("https://i.imgur.com/8XhFZkT.png"); // bebas (preview aja)
+    .setImage("https://i.imgur.com/8XhFZkT.png");
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -53,7 +58,7 @@ client.once("ready", async () => {
   await channel.send({ embeds: [embed], components: [row] });
 });
 
-// ================= INTERACTION =================
+// ===== INTERACTION =====
 client.on("interactionCreate", async (interaction) => {
 
   // BUTTON
@@ -62,7 +67,6 @@ client.on("interactionCreate", async (interaction) => {
 
       const db = loadDB();
 
-      // kalau sudah punya
       if (db[interaction.user.id]) {
         const buffer = await generateKTP(interaction.user, db[interaction.user.id]);
         const file = new AttachmentBuilder(buffer, { name: "ktp.png" });
@@ -74,7 +78,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // modal
       const modal = new ModalBuilder()
         .setCustomId("modal_ktp")
         .setTitle("Isi Data KTP Kamu");
@@ -98,7 +101,7 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  // MODAL SUBMIT
+  // MODAL
   if (interaction.isModalSubmit()) {
     if (interaction.customId === "modal_ktp") {
 
@@ -141,7 +144,7 @@ client.on("interactionCreate", async (interaction) => {
 
 });
 
-// ================= CANVAS PERFECT =================
+// ===== CANVAS FINAL =====
 async function generateKTP(user, data) {
   const canvas = createCanvas(800, 450);
   const ctx = canvas.getContext("2d");
@@ -149,32 +152,27 @@ async function generateKTP(user, data) {
   const bg = await loadImage(path.join(__dirname, "assets/ktp-bg.png"));
   ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
 
-  // overlay gelap biar kontras
+  // overlay gelap
   ctx.fillStyle = "rgba(0,0,0,0.35)";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // ===== STYLE TEXT =====
+  // text style
   ctx.fillStyle = "#ffffff";
   ctx.shadowColor = "rgba(0,0,0,0.8)";
-  ctx.shadowBlur = 6;
+  ctx.shadowBlur = 5;
 
-  // ===== TITLE =====
+  // title
   ctx.textAlign = "center";
-  ctx.font = "bold 26px Arial";
+  ctx.font = "26px Roboto";
   ctx.fillText("KARTU TANDA PENDUDUK", 400, 55);
 
-  ctx.font = "bold 20px Arial";
+  ctx.font = "20px Roboto";
   ctx.fillText("BETLEHEM", 400, 85);
 
   ctx.textAlign = "left";
 
-  // ===== BOX AREA =====
-  ctx.strokeStyle = "rgba(255,255,255,0.2)";
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(70, 120, 420, 240);
-
-  // ===== DATA =====
-  ctx.font = "18px Arial";
+  // data
+  ctx.font = "18px Roboto";
 
   const labelX = 90;
   const colonX = 260;
@@ -199,27 +197,19 @@ async function generateKTP(user, data) {
     ctx.fillText(v, valueX, y);
   });
 
-  // ===== FOTO =====
+  // avatar
   const avatar = await loadImage(
     user.displayAvatarURL({ extension: "png", size: 256 })
   );
 
-  // frame putih
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(545, 135, 165, 205);
-
   ctx.drawImage(avatar, 555, 145, 145, 185);
 
-  // ===== TANGGAL =====
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "14px Arial";
-
+  // tanggal
+  ctx.font = "14px Roboto";
   ctx.fillText("Tanggal Pembuatan:", 540, 360);
-  ctx.fillText(
-    new Date().toLocaleDateString("id-ID"),
-    580,
-    385
-  );
+  ctx.fillText(new Date().toLocaleDateString("id-ID"), 580, 385);
 
   return canvas.toBuffer();
 }
