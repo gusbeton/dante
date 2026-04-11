@@ -144,7 +144,7 @@ client.on("interactionCreate", async (interaction) => {
       const file = new AttachmentBuilder(buffer, { name: "ktp.png" });
 
       const embed = new EmbedBuilder()
-        .setColor("#2b2d31")
+        .setColor("#00f1ff")
         .setImage("attachment://ktp.png")
         .setFooter({
           text: `${interaction.guild.name} • ketuk button dibawah untuk melihat KTP`,
