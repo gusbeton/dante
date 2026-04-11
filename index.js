@@ -13,11 +13,24 @@ const {
   AttachmentBuilder
 } = require("discord.js");
 
-const { createCanvas, loadImage, registerFont } = require("canvas");
+const {
+  createCanvas,
+  loadImage,
+  registerFont
+} = require("canvas");
+
+const {
+  joinVoiceChannel
+} = require("@discordjs/voice");
+
 const fs = require("fs");
 const path = require("path");
 
-// ===== REGISTER FONT =====
+// ===== CONFIG =====
+const TEXT_CHANNEL_ID = "1492441547583524954";
+const VOICE_CHANNEL_ID = "1488854856633680083";
+
+// ===== FONT =====
 registerFont(path.join(__dirname, "assets/Roboto-Bold.ttf"), {
   family: "Roboto"
 });
@@ -40,12 +53,22 @@ function saveDB(data) {
 client.once("ready", async () => {
   console.log(`✅ ${client.user.tag} aktif`);
 
-  const channel = await client.channels.fetch("1492441547583524954");
+  // ===== AUTO JOIN VOICE =====
+  const vc = await client.channels.fetch(VOICE_CHANNEL_ID);
+
+  joinVoiceChannel({
+    channelId: vc.id,
+    guildId: vc.guild.id,
+    adapterCreator: vc.guild.voiceAdapterCreator,
+  });
+
+  // ===== SEND PANEL =====
+  const channel = await client.channels.fetch(TEXT_CHANNEL_ID);
 
   const embed = new EmbedBuilder()
     .setColor("#2b2d31")
     .setTitle("📄 BETLEHEM KTP")
-    .setDescription("BETLEHEM • Klik tombol untuk membuat atau melihat KTP kamu")
+    .setDescription("Klik tombol untuk membuat atau melihat KTP kamu")
     .setImage("https://i.imgur.com/8XhFZkT.png");
 
   const row = new ActionRowBuilder().addComponents(
@@ -72,7 +95,7 @@ client.on("interactionCreate", async (interaction) => {
         const file = new AttachmentBuilder(buffer, { name: "ktp.png" });
 
         return interaction.reply({
-          content: "📄 Ini KTP kamu:",
+          content: `📄 **Kartu Tanda Penduduk milik ${interaction.user}**`,
           files: [file],
           ephemeral: true
         });
@@ -123,9 +146,8 @@ client.on("interactionCreate", async (interaction) => {
 
       const embed = new EmbedBuilder()
         .setColor("#2b2d31")
-        .setTitle(`📄 Kartu Tanda Penduduk milik ${interaction.user.username}`)
-        .setDescription("BETLEHEM • Data berhasil dibuat")
-        .setImage("attachment://ktp.png");
+        .setImage("attachment://ktp.png")
+        .setFooter({ text: "BETLEHEM •  ketuk button dibawah untuk melihat KTP" });
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -135,6 +157,7 @@ client.on("interactionCreate", async (interaction) => {
       );
 
       await interaction.reply({
+        content: `📄 **Kartu Tanda Penduduk milik ${interaction.user}**`,
         embeds: [embed],
         files: [file],
         components: [row]
@@ -144,7 +167,7 @@ client.on("interactionCreate", async (interaction) => {
 
 });
 
-// ===== CANVAS FINAL =====
+// ===== CANVAS =====
 async function generateKTP(user, data) {
   const canvas = createCanvas(800, 450);
   const ctx = canvas.getContext("2d");
@@ -152,26 +175,24 @@ async function generateKTP(user, data) {
   const bg = await loadImage(path.join(__dirname, "assets/ktp-bg.png"));
   ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
 
-  // overlay gelap
   ctx.fillStyle = "rgba(0,0,0,0.35)";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // text style
   ctx.fillStyle = "#ffffff";
   ctx.shadowColor = "rgba(0,0,0,0.8)";
   ctx.shadowBlur = 5;
 
-  // title
+  // TITLE
   ctx.textAlign = "center";
   ctx.font = "26px Roboto";
   ctx.fillText("KARTU TANDA PENDUDUK", 400, 55);
 
   ctx.font = "20px Roboto";
-  ctx.fillText("BETLEHEM", 400, 85);
+  ctx.fillText("GANG DESA", 400, 85);
 
   ctx.textAlign = "left";
 
-  // data
+  // DATA
   ctx.font = "18px Roboto";
 
   const labelX = 90;
@@ -197,7 +218,7 @@ async function generateKTP(user, data) {
     ctx.fillText(v, valueX, y);
   });
 
-  // avatar
+  // AVATAR
   const avatar = await loadImage(
     user.displayAvatarURL({ extension: "png", size: 256 })
   );
@@ -206,10 +227,22 @@ async function generateKTP(user, data) {
   ctx.fillRect(545, 135, 165, 205);
   ctx.drawImage(avatar, 555, 145, 145, 185);
 
-  // tanggal
+  // TANGGAL CENTER
+  const photoX = 555;
+  const photoWidth = 145;
+  const centerX = photoX + photoWidth / 2;
+
+  ctx.textAlign = "center";
   ctx.font = "14px Roboto";
-  ctx.fillText("Tanggal Pembuatan:", 540, 360);
-  ctx.fillText(new Date().toLocaleDateString("id-ID"), 580, 385);
+
+  ctx.fillText("Tanggal Pembuatan", centerX, 360);
+  ctx.fillText(
+    new Date().toLocaleDateString("id-ID"),
+    centerX,
+    385
+  );
+
+  ctx.textAlign = "left";
 
   return canvas.toBuffer();
 }
