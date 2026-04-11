@@ -53,21 +53,20 @@ function saveDB(data) {
 client.once("ready", async () => {
   console.log(`✅ ${client.user.tag} aktif`);
 
-  // ===== AUTO JOIN VOICE =====
+  // AUTO JOIN VOICE
   const vc = await client.channels.fetch(VOICE_CHANNEL_ID);
-
   joinVoiceChannel({
     channelId: vc.id,
     guildId: vc.guild.id,
     adapterCreator: vc.guild.voiceAdapterCreator,
   });
 
-  // ===== SEND PANEL =====
+  // PANEL
   const channel = await client.channels.fetch(TEXT_CHANNEL_ID);
 
   const embed = new EmbedBuilder()
     .setColor("#2b2d31")
-    .setTitle("📄 BETLEHEM KTP")
+    .setTitle("🪪 BETLEHEM KTP")
     .setDescription("Klik tombol untuk membuat atau melihat KTP kamu")
     .setImage("https://media.discordapp.net/attachments/1487590787284734143/1492489699225243729/ktp-bg.png.png?ex=69db84d9&is=69da3359&hm=bb337a5cf83a3c88c88d38b4a6c88146a28d1a224b03b7f14639dc94af8c33a1&=&format=webp&quality=lossless");
 
@@ -147,7 +146,10 @@ client.on("interactionCreate", async (interaction) => {
       const embed = new EmbedBuilder()
         .setColor("#2b2d31")
         .setImage("attachment://ktp.png")
-        .setFooter({ text: "BETLEHEM •  ketuk button dibawah untuk melihat KTP" });
+        .setFooter({
+          text: `${interaction.guild.name} • ketuk button dibawah untuk melihat KTP`,
+          iconURL: interaction.guild.iconURL({ dynamic: true })
+        });
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -157,7 +159,7 @@ client.on("interactionCreate", async (interaction) => {
       );
 
       await interaction.reply({
-        content: `📄 **Kartu Tanda Penduduk milik ${interaction.user}**`,
+        content: `🪪 **Kartu Tanda Penduduk milik ${interaction.user}**`,
         embeds: [embed],
         files: [file],
         components: [row]
@@ -188,7 +190,7 @@ async function generateKTP(user, data) {
   ctx.fillText("KARTU TANDA PENDUDUK", 400, 55);
 
   ctx.font = "20px Roboto";
-  ctx.fillText("GANG DESA", 400, 85);
+  ctx.fillText("BETLEHEM", 400, 85);
 
   ctx.textAlign = "left";
 
