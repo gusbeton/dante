@@ -1,11 +1,17 @@
 {
   "name": "ktp-bot",
   "version": "1.0.0",
+  "description": "KTP Bot Premium System",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": "18.x"
+  },
   "dependencies": {
+    "canvas": "^2.11.2",
     "discord.js": "^14.14.1",
     "dotenv": "^16.4.5"
   }
