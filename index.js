@@ -65,7 +65,7 @@ client.once("ready", async () => {
   const channel = await client.channels.fetch(TEXT_CHANNEL_ID);
 
   const embed = new EmbedBuilder()
-    .setColor("#2b2d31")
+    .setColor("#c30e0e")
     .setTitle("🪪 BETLEHEM KTP")
     .setDescription("Klik tombol untuk membuat atau melihat KTP kamu")
     .setImage("https://media.discordapp.net/attachments/1487590787284734143/1492489699225243729/ktp-bg.png.png?ex=69db84d9&is=69da3359&hm=bb337a5cf83a3c88c88d38b4a6c88146a28d1a224b03b7f14639dc94af8c33a1&=&format=webp&quality=lossless");
