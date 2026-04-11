@@ -121,7 +121,7 @@ client.on("interactionCreate", async (interaction) => {
       const embed = new EmbedBuilder()
         .setColor("#2b2d31")
         .setTitle(`📄 Kartu Tanda Penduduk milik ${interaction.user.username}`)
-        .setDescription("GANG DESA • Data berhasil dibuat")
+        .setDescription("BETLEHEM • Data berhasil dibuat")
         .setImage("attachment://ktp.png");
 
       const row = new ActionRowBuilder().addComponents(
@@ -149,19 +149,32 @@ async function generateKTP(user, data) {
   const bg = await loadImage(path.join(__dirname, "assets/ktp-bg.png"));
   ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
 
-  // title
-  ctx.fillStyle = "#1a1a1a";
+  // overlay gelap biar kontras
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // ===== STYLE TEXT =====
+  ctx.fillStyle = "#ffffff";
+  ctx.shadowColor = "rgba(0,0,0,0.8)";
+  ctx.shadowBlur = 6;
+
+  // ===== TITLE =====
   ctx.textAlign = "center";
   ctx.font = "bold 26px Arial";
   ctx.fillText("KARTU TANDA PENDUDUK", 400, 55);
+
   ctx.font = "bold 20px Arial";
-  ctx.fillText("GANG DESA", 400, 85);
+  ctx.fillText("BETLEHEM", 400, 85);
 
   ctx.textAlign = "left";
 
-  // data
+  // ===== BOX AREA =====
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(70, 120, 420, 240);
+
+  // ===== DATA =====
   ctx.font = "18px Arial";
-  ctx.fillStyle = "#111";
 
   const labelX = 90;
   const colonX = 260;
@@ -186,19 +199,27 @@ async function generateKTP(user, data) {
     ctx.fillText(v, valueX, y);
   });
 
-  // foto
+  // ===== FOTO =====
   const avatar = await loadImage(
     user.displayAvatarURL({ extension: "png", size: 256 })
   );
 
-  ctx.fillStyle = "#fff";
+  // frame putih
+  ctx.fillStyle = "#ffffff";
   ctx.fillRect(545, 135, 165, 205);
+
   ctx.drawImage(avatar, 555, 145, 145, 185);
 
-  // tanggal
+  // ===== TANGGAL =====
+  ctx.fillStyle = "#ffffff";
   ctx.font = "14px Arial";
+
   ctx.fillText("Tanggal Pembuatan:", 540, 360);
-  ctx.fillText(new Date().toLocaleDateString("id-ID"), 580, 385);
+  ctx.fillText(
+    new Date().toLocaleDateString("id-ID"),
+    580,
+    385
+  );
 
   return canvas.toBuffer();
 }
