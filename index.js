@@ -37,6 +37,12 @@ const PANEL_IMAGE = "https://media.discordapp.net/attachments/148759078728473414
 const LOGO_URL = "https://media.discordapp.net/attachments/1487590787284734143/1492050545219862598/bthl.png";
 const FOOTER_TEXT = "Dante • Copyright ©2018 - BTHL";
 
+// 🎯 VALORANT TRACKER
+// API key gratis dari HenrikDev (https://api.henrikdev.xyz/dashboard).
+// Isi di .env / Railway Variables: HENRIK_API_KEY=HDEV-xxxx
+const HENRIK_API_KEY = process.env.HENRIK_API_KEY || "";
+const VALO_COLOR = 0xff4655;
+
 // Folder data. Di Railway, pasang Volume lalu isi env DATA_DIR = path mount-nya
 // (misal /data) supaya database KTP tidak hilang saat redeploy.
 const DATA_DIR = process.env.DATA_DIR || __dirname;
@@ -205,6 +211,200 @@ client.once("clientReady", async () => {
     await sendOrUpdatePanel();
   } catch (err) {
     console.log("❌ Error setup panel:", err);
+  }
+
+  // Slash command /valo
+  for (const guild of client.guilds.cache.values()) {
+    await guild.commands.create({
+      name: "valo",
+      description: "Cek rank & match terakhir akun VALORANT",
+      dm_permission: false,
+      options: [{
+        type: 3, // STRING
+        name: "riot_id",
+        description: "Riot ID, contoh: Nama#TAG",
+        required: true,
+        max_length: 40
+      }]
+    }).catch(err => console.log(`⚠️ Gagal daftar /valo di ${guild.name}:`, err.message));
+  }
+});
+
+// =======================
+// 🎯 VALORANT TRACKER (/valo)
+// =======================
+const valoCache = new Map(); // "nama#tag" → { time, payload }
+const VALO_CACHE_MS = 60000;
+
+async function henrik(pathname) {
+  const res = await fetch(`https://api.henrikdev.xyz${pathname}`, {
+    headers: { Authorization: HENRIK_API_KEY },
+    signal: AbortSignal.timeout(15000)
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(json?.errors?.[0]?.message || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return json.data;
+}
+
+function rankIcon(tierId) {
+  return tierId > 2
+    ? `https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/${tierId}/largeicon.png`
+    : null;
+}
+
+function cardWide(card) {
+  if (!card) return null;
+  if (typeof card === "string") return `https://media.valorant-api.com/playercards/${card}/wideart.png`;
+  return card.wide || null;
+}
+
+async function buildValoProfile(name, tag) {
+  const n = encodeURIComponent(name);
+  const t = encodeURIComponent(tag);
+
+  const account = await henrik(`/valorant/v1/account/${n}/${t}`);
+  const region = account.region || "ap";
+
+  const [mmr, matches] = await Promise.all([
+    henrik(`/valorant/v3/mmr/${region}/pc/${n}/${t}`).catch(() => null),
+    henrik(`/valorant/v4/matches/${region}/pc/${n}/${t}?mode=competitive&size=5`).catch(() => null)
+  ]);
+
+  // ===== RANK =====
+  const current = mmr?.current;
+  const peak = mmr?.peak;
+  const tierId = current?.tier?.id ?? 0;
+  const rankName = tierId > 2 ? current.tier.name : "Unrated";
+  const lastChange = current?.last_change;
+
+  // ===== MATCH TERAKHIR =====
+  const lines = [];
+  let k = 0, d = 0, a = 0, hs = 0, shots = 0, win = 0;
+
+  for (const m of (Array.isArray(matches) ? matches : [])) {
+    const p = m.players?.find(pl => pl.puuid === account.puuid);
+    if (!p) continue;
+
+    const team = m.teams?.find(tm => tm.team_id === p.team_id);
+    const enemy = m.teams?.find(tm => tm.team_id !== p.team_id);
+    const won = team?.won;
+    const draw = team && enemy && team.rounds?.won === enemy.rounds?.won;
+    if (won) win++;
+
+    const s = p.stats || {};
+    k += s.kills || 0; d += s.deaths || 0; a += s.assists || 0;
+    hs += s.headshots || 0;
+    shots += (s.headshots || 0) + (s.bodyshots || 0) + (s.legshots || 0);
+
+    const map = typeof m.metadata?.map === "string" ? m.metadata.map : m.metadata?.map?.name;
+    const agent = p.agent?.name || p.character || "?";
+    const skor = team ? `${team.rounds?.won ?? "?"}-${team.rounds?.lost ?? "?"}` : "";
+    const icon = draw ? "⚪" : won ? "🟢" : "🔴";
+    const waktu = m.metadata?.started_at ? ` • <t:${Math.floor(new Date(m.metadata.started_at) / 1000)}:R>` : "";
+
+    lines.push(`${icon} **${map || "?"}** • ${agent} • \`${s.kills ?? 0}/${s.deaths ?? 0}/${s.assists ?? 0}\` • ${skor}${waktu}`);
+  }
+
+  // ===== EMBED =====
+  const riotId = `${account.name}#${account.tag}`;
+  const embed = new EmbedBuilder()
+    .setColor(VALO_COLOR)
+    .setAuthor({ name: "VALORANT TRACKER", iconURL: LOGO_URL })
+    .setTitle(riotId)
+    .setURL(`https://tracker.gg/valorant/profile/riot/${encodeURIComponent(riotId)}/overview`)
+    .addFields(
+      { name: "🎚️ Level", value: `> ${account.account_level ?? "-"}`, inline: true },
+      { name: "🌏 Region", value: `> ${region.toUpperCase()}`, inline: true },
+      { name: "​", value: "​", inline: true },
+      {
+        name: "🏆 Rank Sekarang",
+        value: `> **${rankName}**` + (tierId > 2 ? ` — ${current.rr ?? 0} RR` : "") +
+          (typeof lastChange === "number" && tierId > 2 ? ` (${lastChange >= 0 ? "+" : ""}${lastChange})` : ""),
+        inline: true
+      },
+      {
+        name: "⛰️ Peak Rank",
+        value: peak?.tier?.name
+          ? `> **${peak.tier.name}**${peak.season?.short ? ` (${peak.season.short.toUpperCase()})` : ""}`
+          : "> -",
+        inline: true
+      }
+    )
+    .setFooter({ text: FOOTER_TEXT })
+    .setTimestamp();
+
+  const icon = rankIcon(tierId);
+  if (icon) embed.setThumbnail(icon);
+
+  const card = cardWide(account.card);
+  if (card) embed.setImage(card);
+
+  if (lines.length) {
+    const kd = d ? (k / d).toFixed(2) : k.toFixed(2);
+    const hsp = shots ? Math.round((hs / shots) * 100) : 0;
+    embed.addFields(
+      {
+        name: `📊 ${lines.length} Competitive Terakhir`,
+        value: `> Win **${win}/${lines.length}** • K/D **${kd}** • HS **${hsp}%**`
+      },
+      { name: "🕹️ Riwayat Match", value: lines.join("\n").slice(0, 1024) }
+    );
+  } else {
+    embed.addFields({ name: "🕹️ Riwayat Match", value: "> Belum ada match competitive terbaru." });
+  }
+
+  const button = new ButtonBuilder()
+    .setStyle(ButtonStyle.Link)
+    .setLabel("Tracker.gg")
+    .setURL(`https://tracker.gg/valorant/profile/riot/${encodeURIComponent(riotId)}/overview`);
+
+  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] };
+}
+
+client.on("interactionCreate", async (i) => {
+  if (!i.isChatInputCommand() || i.commandName !== "valo") return;
+
+  const errorReply = desc => ({
+    embeds: [baseEmbed(i.guild).setColor("#ED4245").setTitle("⚠️ Gagal").setDescription(desc)]
+  });
+
+  try {
+    await i.deferReply();
+
+    if (!HENRIK_API_KEY) {
+      return i.editReply(errorReply("> Fitur tracker belum aktif. **ADMIN** perlu mengisi `HENRIK_API_KEY`."));
+    }
+
+    const input = i.options.getString("riot_id").trim();
+    const idx = input.lastIndexOf("#");
+    const name = idx > 0 ? input.slice(0, idx).trim() : "";
+    const tag = idx > 0 ? input.slice(idx + 1).trim() : "";
+
+    if (!name || !tag) {
+      return i.editReply(errorReply("> Format Riot ID salah. Contoh: `/valo riot_id: Nama#TAG`"));
+    }
+
+    const key = `${name}#${tag}`.toLowerCase();
+    const cached = valoCache.get(key);
+    if (cached && Date.now() - cached.time < VALO_CACHE_MS) {
+      return i.editReply(cached.payload);
+    }
+
+    const payload = await buildValoProfile(name, tag);
+    valoCache.set(key, { time: Date.now(), payload });
+    return i.editReply(payload);
+  } catch (err) {
+    console.log("❌ Error /valo:", err.status || "", err.message);
+    const desc =
+      err.status === 404 ? "> Akun tidak ditemukan. Cek lagi **Nama#TAG**-nya ya." :
+      err.status === 429 ? "> Terlalu banyak request, coba lagi sebentar lagi ya." :
+      err.status === 401 || err.status === 403 ? "> API key tracker tidak valid. Hubungi **ADMIN**." :
+      "> Gagal mengambil data VALORANT, coba lagi nanti ya.";
+    i.editReply(errorReply(desc)).catch(() => {});
   }
 });
 
