@@ -227,6 +227,33 @@ client.once("clientReady", async () => {
         max_length: 40
       }]
     }).catch(err => console.log(`⚠️ Gagal daftar /valo di ${guild.name}:`, err.message));
+
+    await guild.commands.create({
+      name: "match",
+      description: "Scoreboard match VALORANT terakhir (10 pemain)",
+      dm_permission: false,
+      options: [
+        {
+          type: 3, // STRING
+          name: "riot_id",
+          description: "Riot ID, contoh: Nama#TAG",
+          required: true,
+          max_length: 40
+        },
+        {
+          type: 3,
+          name: "mode",
+          description: "Mode match (default: semua mode)",
+          required: false,
+          choices: [
+            { name: "Competitive", value: "competitive" },
+            { name: "Unrated", value: "unrated" },
+            { name: "Swiftplay", value: "swiftplay" },
+            { name: "Premier", value: "premier" }
+          ]
+        }
+      ]
+    }).catch(err => console.log(`⚠️ Gagal daftar /match di ${guild.name}:`, err.message));
   }
 });
 
@@ -364,6 +391,160 @@ async function buildValoProfile(name, tag) {
 
   return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] };
 }
+
+// =======================
+// 📋 MATCH SCOREBOARD (/match)
+// =======================
+function parseRiotId(input) {
+  const s = String(input).trim();
+  const idx = s.lastIndexOf("#");
+  const name = idx > 0 ? s.slice(0, idx).trim() : "";
+  const tag = idx > 0 ? s.slice(idx + 1).trim() : "";
+  return name && tag ? { name, tag } : null;
+}
+
+const pad = (v, n) => {
+  const s = String(v);
+  return s.length > n ? s.slice(0, n - 1) + "…" : s.padEnd(n);
+};
+
+async function buildMatchScoreboard(name, tag, mode) {
+  const n = encodeURIComponent(name);
+  const t = encodeURIComponent(tag);
+
+  const account = await henrik(`/valorant/v1/account/${n}/${t}`);
+  const region = account.region || "ap";
+
+  const query = `size=1${mode ? `&mode=${mode}` : ""}`;
+  const matches = await henrik(`/valorant/v4/matches/${region}/pc/${n}/${t}?${query}`);
+  const m = Array.isArray(matches) ? matches[0] : null;
+  if (!m) return null;
+
+  const players = m.players || [];
+  const me = players.find(p => p.puuid === account.puuid);
+
+  const totalRounds =
+    (Array.isArray(m.rounds) && m.rounds.length) ||
+    ((m.teams?.[0]?.rounds?.won ?? 0) + (m.teams?.[0]?.rounds?.lost ?? 0)) ||
+    1;
+
+  const acs = p => Math.round((p.stats?.score || 0) / totalRounds);
+  const mvp = [...players].sort((a, b) => acs(b) - acs(a))[0];
+
+  const row = p => {
+    const s = p.stats || {};
+    const mark = p.puuid === account.puuid ? "▶" : p === mvp ? "★" : " ";
+    const kda = `${s.kills ?? 0}/${s.deaths ?? 0}/${s.assists ?? 0}`;
+    return `${mark}${pad(p.agent?.name || p.character || "?", 9)}${pad(p.name || "?", 13)}${pad(kda, 9)}${acs(p)}`;
+  };
+  const header = ` ${pad("Agent", 9)}${pad("Nama", 13)}${pad("K/D/A", 9)}ACS`;
+  const table = list =>
+    "```\n" + [header, ...list.sort((a, b) => acs(b) - acs(a)).map(row)].join("\n") + "\n```";
+
+  const map = typeof m.metadata?.map === "string" ? m.metadata.map : m.metadata?.map?.name;
+  const queue = m.metadata?.queue?.name || m.metadata?.mode || mode || "-";
+  const started = m.metadata?.started_at ? Math.floor(new Date(m.metadata.started_at) / 1000) : null;
+  const durasi = m.metadata?.game_length_in_ms
+    ? `${Math.round(m.metadata.game_length_in_ms / 60000)} menit`
+    : null;
+
+  const embed = new EmbedBuilder()
+    .setColor(VALO_COLOR)
+    .setAuthor({ name: "VALORANT MATCH", iconURL: LOGO_URL })
+    .setTitle(`${map || "?"} • ${queue}`)
+    .setFooter({ text: `▶ = ${account.name}#${account.tag}  ★ = MVP • ${FOOTER_TEXT}` })
+    .setTimestamp();
+
+  const info = [];
+  if (started) info.push(`🕒 <t:${started}:f> (<t:${started}:R>)`);
+  if (durasi) info.push(`⏱️ ${durasi} • ${totalRounds} ronde`);
+
+  const teams = m.teams || [];
+  if (teams.length === 2 && me) {
+    // Tim pemain yang dicari ditaruh di atas
+    const myTeam = teams.find(tm => tm.team_id === me.team_id) || teams[0];
+    const enemy = teams.find(tm => tm !== myTeam);
+    const hasil =
+      myTeam.rounds?.won === enemy.rounds?.won ? "⚪ SERI" : myTeam.won ? "🟢 MENANG" : "🔴 KALAH";
+
+    embed
+      .setColor(myTeam.won ? 0x16a34a : myTeam.rounds?.won === enemy.rounds?.won ? 0x9ca3af : VALO_COLOR)
+      .setDescription(
+        `## ${hasil}  ${myTeam.rounds?.won ?? "?"} - ${enemy.rounds?.won ?? "?"}\n` + info.join("\n")
+      )
+      .addFields(
+        {
+          name: `Tim ${account.name} (${myTeam.team_id})`,
+          value: table(players.filter(p => p.team_id === myTeam.team_id)).slice(0, 1024)
+        },
+        {
+          name: `Tim Lawan (${enemy.team_id})`,
+          value: table(players.filter(p => p.team_id === enemy.team_id)).slice(0, 1024)
+        }
+      );
+  } else {
+    // Deathmatch dll: satu daftar saja
+    embed
+      .setDescription(info.join("\n") || null)
+      .addFields({ name: "Scoreboard", value: table(players.slice(0, 14)).slice(0, 1024) });
+  }
+
+  const matchId = m.metadata?.match_id;
+  const components = matchId
+    ? [new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setStyle(ButtonStyle.Link)
+          .setLabel("Detail di Tracker.gg")
+          .setURL(`https://tracker.gg/valorant/match/${matchId}`)
+      )]
+    : [];
+
+  return { embeds: [embed], components };
+}
+
+client.on("interactionCreate", async (i) => {
+  if (!i.isChatInputCommand() || i.commandName !== "match") return;
+
+  const errorReply = desc => ({
+    embeds: [baseEmbed(i.guild).setColor("#ED4245").setTitle("⚠️ Gagal").setDescription(desc)]
+  });
+
+  try {
+    await i.deferReply();
+
+    if (!HENRIK_API_KEY) {
+      return i.editReply(errorReply("> Fitur tracker belum aktif. **ADMIN** perlu mengisi `HENRIK_API_KEY`."));
+    }
+
+    const id = parseRiotId(i.options.getString("riot_id"));
+    if (!id) {
+      return i.editReply(errorReply("> Format Riot ID salah. Contoh: `/match riot_id: Nama#TAG`"));
+    }
+
+    const mode = i.options.getString("mode") || "";
+    const key = `match:${id.name}#${id.tag}:${mode}`.toLowerCase();
+    const cached = valoCache.get(key);
+    if (cached && Date.now() - cached.time < VALO_CACHE_MS) {
+      return i.editReply(cached.payload);
+    }
+
+    const payload = await buildMatchScoreboard(id.name, id.tag, mode);
+    if (!payload) {
+      return i.editReply(errorReply(`> Belum ada match${mode ? ` **${mode}**` : ""} terbaru untuk akun ini.`));
+    }
+
+    valoCache.set(key, { time: Date.now(), payload });
+    return i.editReply(payload);
+  } catch (err) {
+    console.log("❌ Error /match:", err.status || "", err.message);
+    const desc =
+      err.status === 404 ? "> Akun atau match tidak ditemukan. Cek lagi **Nama#TAG**-nya ya." :
+      err.status === 429 ? "> Terlalu banyak request, coba lagi sebentar lagi ya." :
+      err.status === 401 || err.status === 403 ? "> API key tracker tidak valid. Hubungi **ADMIN**." :
+      "> Gagal mengambil data match, coba lagi nanti ya.";
+    i.editReply(errorReply(desc)).catch(() => {});
+  }
+});
 
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand() || i.commandName !== "valo") return;
