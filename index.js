@@ -1212,4 +1212,95 @@ async function loadAvatar(user) {
 }
 
 async function generateKTP(user, data) {
-  const canvas = createCanvas
+  const canvas = createCanvas(800, 450);
+  const ctx = canvas.getContext("2d");
+
+  const bg = await loadImage(path.join(__dirname, "assets/ktp-bg.png"));
+  ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.shadowColor = "rgba(0,0,0,0.8)";
+  ctx.shadowBlur = 5;
+
+  // TITLE
+  ctx.textAlign = "center";
+  ctx.font = "26px Roboto";
+  ctx.fillText("KARTU TANDA PENDUDUK", 400, 55);
+
+  ctx.font = "20px Roboto";
+  ctx.fillText("BETLEHEM", 400, 85);
+
+  ctx.textAlign = "left";
+
+  // DATA
+  ctx.font = "18px Roboto";
+
+  const labelX = 90;
+  const colonX = 260;
+  const valueX = 280;
+  const maxValueWidth = 250; // supaya teks panjang tidak menabrak foto
+
+  const startY = 150;
+  const gap = 36;
+
+  const rows = [
+    ["No KTP", data.noKTP],
+    ["Nama", data.nama],
+    ["Jenis Kelamin", data.kelamin],
+    ["Domisili", data.domisili],
+    ["Agama", data.agama],
+    ["Hobi", data.hobi]
+  ];
+
+  rows.forEach(([k, v], i) => {
+    const y = startY + i * gap;
+    ctx.fillText(k, labelX, y);
+    ctx.fillText(":", colonX, y);
+    ctx.fillText(String(v ?? "-"), valueX, y, maxValueWidth);
+  });
+
+  // FOTO (avatar di-crop tengah supaya tidak gepeng)
+  const photoX = 555, photoY = 145, photoW = 145, photoH = 185;
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(photoX - 10, photoY - 10, photoW + 20, photoH + 20);
+
+  try {
+    const avatar = await loadAvatar(user);
+    const ratio = photoW / photoH;
+    const sw = avatar.height * ratio;
+    const sx = (avatar.width - sw) / 2;
+    ctx.drawImage(avatar, sx, 0, sw, avatar.height, photoX, photoY, photoW, photoH);
+  } catch {
+    ctx.fillStyle = "#999999";
+    ctx.fillRect(photoX, photoY, photoW, photoH);
+  }
+
+  // TANGGAL PEMBUATAN
+  ctx.fillStyle = "#ffffff";
+  ctx.shadowBlur = 5;
+  ctx.textAlign = "center";
+  ctx.font = "14px Roboto";
+
+  const centerX = photoX + photoW / 2;
+  ctx.fillText("Tanggal Pembuatan", centerX, 360);
+  ctx.fillText(
+    new Date(data.dibuat || Date.now()).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" }),
+    centerX,
+    385
+  );
+
+  return canvas.toBuffer("image/png");
+}
+
+// =======================
+// 🛡️ ANTI CRASH
+// =======================
+process.on("unhandledRejection", err => console.log("Unhandled Rejection:", err));
+process.on("uncaughtException", err => console.log("Uncaught Exception:", err));
+
+client.login(process.env.TOKEN);
