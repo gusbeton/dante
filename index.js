@@ -16,6 +16,7 @@ const {
 } = require("discord.js");
 
 const { createCanvas, loadImage, GlobalFonts } = require("@napi-rs/canvas");
+const { renderScoreboard } = require("./valo-scoreboard");
 
 const {
   joinVoiceChannel,
@@ -489,6 +490,16 @@ async function buildMatchScoreboard(name, tag, mode) {
       .addFields({ name: "Scoreboard", value: table(players.slice(0, 14)).slice(0, 1024) });
   }
 
+  // Scoreboard bergambar (ikon agent & rank). Kalau gagal, tetap pakai tabel teks di atas.
+  let files = [];
+  try {
+    const buffer = await renderScoreboard(m, account.puuid);
+    files = [new AttachmentBuilder(buffer, { name: "scoreboard.png" })];
+    embed.setFields([]).setImage("attachment://scoreboard.png");
+  } catch (err) {
+    console.log("⚠️ Gagal render scoreboard:", err.message);
+  }
+
   const matchId = m.metadata?.match_id;
   const components = matchId
     ? [new ActionRowBuilder().addComponents(
@@ -499,7 +510,7 @@ async function buildMatchScoreboard(name, tag, mode) {
       )]
     : [];
 
-  return { embeds: [embed], components };
+  return { embeds: [embed], components, files };
 }
 
 client.on("interactionCreate", async (i) => {
