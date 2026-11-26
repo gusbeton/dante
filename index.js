@@ -286,7 +286,8 @@ client.once("clientReady", async () => {
     await guild.commands.create({
       name: "unlink",
       description: "Lepas akun VALORANT yang terhubung",
-      dm_permission: false
+      dm_permission: false,
+      options: [{ type: 6, name: "member", description: "(Admin) lepas akun milik member lain", required: false }]
     }).catch(err => console.log(`⚠️ Gagal daftar /unlink di ${guild.name}:`, err.message));
 
     await guild.commands.create({
@@ -634,17 +635,26 @@ client.on("interactionCreate", async (i) => {
 
     // ===== /unlink =====
     if (i.commandName === "unlink") {
-      const links = loadLinks();
-      if (!links[i.user.id]) {
-        return i.reply(ephem(errorEmbedDante("> Kamu belum menghubungkan akun VALORANT.", i.guild)));
+      const targetUser = i.options.getUser("member") || i.user;
+      const forOther = targetUser.id !== i.user.id;
+      if (forOther && !i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        return i.reply(ephem(errorEmbedDante("> Cuma **ADMIN** yang bisa melepas akun member lain.", i.guild)));
       }
-      const old = links[i.user.id];
-      delete links[i.user.id];
+
+      const links = loadLinks();
+      if (!links[targetUser.id]) {
+        return i.reply(ephem(errorEmbedDante(
+          forOther ? `> ${targetUser} belum menghubungkan akun VALORANT.` : "> Kamu belum menghubungkan akun VALORANT.",
+          i.guild
+        )));
+      }
+      const old = links[targetUser.id];
+      delete links[targetUser.id];
       saveLinks(links);
       return i.reply(ephem(baseEmbed(i.guild)
         .setColor("#00f1ff")
         .setTitle("🔓 Akun Dilepas")
-        .setDescription(`> **${old.name}#${old.tag}** sudah tidak terhubung lagi.`)));
+        .setDescription(`> **${old.name}#${old.tag}**${forOther ? ` milik ${targetUser}` : ""} sudah tidak terhubung lagi.`)));
     }
 
     // ===== /rankuptest =====
