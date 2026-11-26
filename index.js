@@ -16,7 +16,7 @@ const {
 } = require("discord.js");
 
 const { createCanvas, loadImage, GlobalFonts } = require("@napi-rs/canvas");
-const { renderScoreboard, renderPartyCard } = require("./valo-scoreboard");
+const { renderScoreboard, renderPartyCard, renderRankUpCard, TIER_NAMES } = require("./valo-scoreboard");
 
 const {
   joinVoiceChannel,
@@ -43,6 +43,10 @@ const FOOTER_TEXT = "Dante • Copyright ©2018 - BTHL";
 // Isi di .env / Railway Variables: HENRIK_API_KEY=HDEV-xxxx
 const HENRIK_API_KEY = process.env.HENRIK_API_KEY || "";
 const VALO_COLOR = 0xff4655;
+
+// 🎉 Channel announce rank up (kosongkan = tidak announce, data tetap dipantau)
+const RANKUP_CHANNEL_ID = process.env.RANKUP_CHANNEL_ID || "";
+const RANKUP_CHECK_EVERY = 20000; // cek 1 member tiap 20 detik (hemat kuota API)
 
 // Folder data. Di Railway, pasang Volume lalu isi env DATA_DIR = path mount-nya
 // (misal /data) supaya database KTP tidak hilang saat redeploy.
@@ -261,7 +265,30 @@ client.once("clientReady", async () => {
       description: "Buat & share party code VALORANT ke channel ini",
       dm_permission: false
     }).catch(err => console.log(`⚠️ Gagal daftar /party di ${guild.name}:`, err.message));
+
+    await guild.commands.create({
+      name: "link",
+      description: "Hubungkan akun VALORANT kamu (untuk announce rank up)",
+      dm_permission: false,
+      options: [{ type: 3, name: "riot_id", description: "Riot ID kamu, contoh: Nama#TAG", required: true, max_length: 40 }]
+    }).catch(err => console.log(`⚠️ Gagal daftar /link di ${guild.name}:`, err.message));
+
+    await guild.commands.create({
+      name: "unlink",
+      description: "Lepas akun VALORANT yang terhubung",
+      dm_permission: false
+    }).catch(err => console.log(`⚠️ Gagal daftar /unlink di ${guild.name}:`, err.message));
+
+    await guild.commands.create({
+      name: "rankuptest",
+      description: "Preview announce rank up di channel ini",
+      default_member_permissions: "32", // Manage Server
+      dm_permission: false
+    }).catch(err => console.log(`⚠️ Gagal daftar /rankuptest di ${guild.name}:`, err.message));
   }
+
+  // pantau rank member yang sudah /link
+  setInterval(checkNextRank, RANKUP_CHECK_EVERY);
 });
 
 // =======================
@@ -398,6 +425,208 @@ async function buildValoProfile(name, tag) {
 
   return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] };
 }
+
+// =======================
+// 🔗 LINK AKUN + 🎉 RANK UP
+// =======================
+const LINKS_FILE = path.join(DATA_DIR, "valo-links.json");
+
+function loadLinks() {
+  try { return JSON.parse(fs.readFileSync(LINKS_FILE, "utf8")); } catch { return {}; }
+}
+function saveLinks(data) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(LINKS_FILE, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.log("⚠️ Gagal simpan valo-links:", err.message);
+  }
+}
+
+// ambil rank sekarang (pakai puuid supaya tetap jalan walau ganti nama)
+async function fetchCurrentRank(link) {
+  let mmr;
+  try {
+    mmr = await henrik(`/valorant/v3/by-puuid/mmr/${link.region}/pc/${link.puuid}`);
+  } catch (err) {
+    if (err.status === 429 || err.status === 401 || err.status === 403) throw err;
+    mmr = await henrik(`/valorant/v3/mmr/${link.region}/pc/${encodeURIComponent(link.name)}/${encodeURIComponent(link.tag)}`);
+  }
+  return {
+    tier: mmr?.current?.tier?.id ?? 0,
+    rr: mmr?.current?.rr ?? null,
+    name: mmr?.account?.name || link.name,
+    tag: mmr?.account?.tag || link.tag
+  };
+}
+
+async function rankUpPayload({ member, link, oldTier, newTier, rr, test = false }) {
+  const card = await renderRankUpCard({
+    name: member.displayName,
+    riotId: `${link.name}#${link.tag}`,
+    avatarUrl: member.user.displayAvatarURL({ extension: "png", size: 256 }),
+    oldTier,
+    newTier,
+    rr
+  }).catch(err => { console.log("⚠️ Gagal render rank up:", err.message); return null; });
+
+  const embed = new EmbedBuilder()
+    .setColor(VALO_COLOR)
+    .setDescription(`🎉 Selamat ${member}! Rank naik dari **${TIER_NAMES[oldTier]}** ke **${TIER_NAMES[newTier]}**${rr != null ? ` (${rr} RR)` : ""}.`)
+    .setFooter({ text: FOOTER_TEXT })
+    .setTimestamp();
+  if (card) embed.setImage("attachment://rankup.png");
+
+  return {
+    content: `${test ? "🧪 **[TEST]** " : ""}🎉 ${member} naik ke **${TIER_NAMES[newTier]}**!`,
+    embeds: [embed],
+    files: card ? [new AttachmentBuilder(card, { name: "rankup.png" })] : [],
+    allowedMentions: test ? { parse: [] } : { users: [member.id] }
+  };
+}
+
+let rankCursor = 0;
+let rankChecking = false;
+
+async function checkNextRank() {
+  if (rankChecking || !HENRIK_API_KEY) return;
+  const links = loadLinks();
+  const ids = Object.keys(links);
+  if (!ids.length) return;
+
+  rankChecking = true;
+  const userId = ids[rankCursor % ids.length];
+  rankCursor++;
+
+  try {
+    const link = links[userId];
+    const now = await fetchCurrentRank(link);
+    const oldTier = link.tier ?? 0;
+
+    // naik rank (dari rank yang sudah ada, bukan dari unrated/placement)
+    if (oldTier > 2 && now.tier > oldTier && RANKUP_CHANNEL_ID) {
+      const guild = client.guilds.cache.get(link.guildId);
+      const member = await guild?.members.fetch(userId).catch(() => null);
+      const ch = await client.channels.fetch(RANKUP_CHANNEL_ID).catch(() => null);
+      if (member && ch) {
+        await ch.send(await rankUpPayload({ member, link: { ...link, ...now }, oldTier, newTier: now.tier, rr: now.rr }));
+        console.log(`🎉 ${member.user.tag} rank up ${TIER_NAMES[oldTier]} → ${TIER_NAMES[now.tier]}`);
+      }
+    }
+
+    // simpan rank terbaru (ambil ulang file supaya tidak menimpa /link yang baru)
+    const fresh = loadLinks();
+    if (fresh[userId]) {
+      Object.assign(fresh[userId], { tier: now.tier, rr: now.rr, name: now.name, tag: now.tag, checked: Date.now() });
+      saveLinks(fresh);
+    }
+  } catch (err) {
+    if (err.status !== 429) console.log("⚠️ Cek rank gagal:", err.status || "", err.message);
+  } finally {
+    rankChecking = false;
+  }
+}
+
+client.on("interactionCreate", async (i) => {
+  if (!i.isChatInputCommand() || !["link", "unlink", "rankuptest"].includes(i.commandName)) return;
+
+  try {
+    // ===== /link =====
+    if (i.commandName === "link") {
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      if (!HENRIK_API_KEY) {
+        return i.editReply({ embeds: [errorEmbedDante("> Fitur tracker belum aktif. **ADMIN** perlu mengisi `HENRIK_API_KEY`.", i.guild)] });
+      }
+
+      const id = parseRiotId(i.options.getString("riot_id"));
+      if (!id) {
+        return i.editReply({ embeds: [errorEmbedDante("> Format Riot ID salah. Contoh: `/link riot_id: Nama#TAG`", i.guild)] });
+      }
+
+      const account = await henrik(`/valorant/v1/account/${encodeURIComponent(id.name)}/${encodeURIComponent(id.tag)}`);
+      const link = {
+        guildId: i.guild.id,
+        puuid: account.puuid,
+        region: account.region || "ap",
+        name: account.name,
+        tag: account.tag,
+        tier: 0,
+        rr: null
+      };
+      const now = await fetchCurrentRank(link).catch(() => null);
+      if (now) Object.assign(link, { tier: now.tier, rr: now.rr });
+
+      const links = loadLinks();
+      links[i.user.id] = link;
+      saveLinks(links);
+
+      const icon = link.tier > 2
+        ? `https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/${link.tier}/largeicon.png`
+        : null;
+      const embed = baseEmbed(i.guild)
+        .setColor("#00f1ff")
+        .setTitle("🔗 Akun Terhubung")
+        .setDescription(
+          `> Riot ID: **${link.name}#${link.tag}**\n` +
+          `> Rank sekarang: **${TIER_NAMES[link.tier] || "Unrated"}**${link.rr != null && link.tier > 2 ? ` (${link.rr} RR)` : ""}\n\n` +
+          "Kalau rank kamu naik, bot akan otomatis mengumumkannya 🎉"
+        );
+      if (icon) embed.setThumbnail(icon);
+      return i.editReply({ embeds: [embed] });
+    }
+
+    // ===== /unlink =====
+    if (i.commandName === "unlink") {
+      const links = loadLinks();
+      if (!links[i.user.id]) {
+        return i.reply(ephem(errorEmbedDante("> Kamu belum menghubungkan akun VALORANT.", i.guild)));
+      }
+      const old = links[i.user.id];
+      delete links[i.user.id];
+      saveLinks(links);
+      return i.reply(ephem(baseEmbed(i.guild)
+        .setColor("#00f1ff")
+        .setTitle("🔓 Akun Dilepas")
+        .setDescription(`> **${old.name}#${old.tag}** sudah tidak terhubung lagi.`)));
+    }
+
+    // ===== /rankuptest =====
+    if (i.commandName === "rankuptest") {
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const link = loadLinks()[i.user.id];
+      const newTier = link?.tier > 3 ? link.tier : 18; // default contoh: Diamond 1
+      const oldTier = newTier - 1;
+      const payload = await rankUpPayload({
+        member: i.member,
+        link: link || { name: "Contoh", tag: "TEST" },
+        oldTier,
+        newTier,
+        rr: link?.rr ?? 12,
+        test: true
+      });
+      await i.channel.send(payload);
+
+      return i.editReply({ embeds: [baseEmbed(i.guild)
+        .setColor("#00f1ff")
+        .setTitle("✅ Preview Terkirim")
+        .setDescription(
+          "> Preview announce rank up dikirim ke channel ini." +
+          (link ? "" : "\n> Kamu belum `/link`, jadi pakai data contoh.") +
+          (RANKUP_CHANNEL_ID ? "" : "\n> ⚠️ `RANKUP_CHANNEL_ID` belum diisi, announce asli belum aktif.")
+        )] });
+    }
+  } catch (err) {
+    console.log(`❌ Error /${i.commandName}:`, err.status || "", err.message);
+    const desc =
+      err.status === 404 ? "> Akun tidak ditemukan. Cek lagi **Nama#TAG**-nya ya." :
+      err.status === 429 ? "> Terlalu banyak request, coba lagi sebentar lagi ya." :
+      "> Terjadi kendala, coba lagi nanti ya.";
+    const fail = errorEmbedDante(desc, i.guild);
+    if (i.deferred) i.editReply({ embeds: [fail] }).catch(() => {});
+    else if (!i.replied) i.reply(ephem(fail)).catch(() => {});
+  }
+});
 
 // =======================
 // 🎮 PARTY CODE (/party)
