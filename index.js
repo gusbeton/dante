@@ -12,11 +12,12 @@ const {
   TextInputStyle,
   AttachmentBuilder,
   ChannelType,
-  MessageFlags
+  MessageFlags,
+  PermissionFlagsBits
 } = require("discord.js");
 
 const { createCanvas, loadImage, GlobalFonts } = require("@napi-rs/canvas");
-const { renderScoreboard, renderPartyCard, renderRankUpCard, TIER_NAMES } = require("./valo-scoreboard");
+const { renderScoreboard, renderPartyCard, renderRankUpCard, renderLeaderboard, TIER_NAMES } = require("./valo-scoreboard");
 
 const {
   joinVoiceChannel,
@@ -270,8 +271,17 @@ client.once("clientReady", async () => {
       name: "link",
       description: "Hubungkan akun VALORANT kamu (untuk announce rank up)",
       dm_permission: false,
-      options: [{ type: 3, name: "riot_id", description: "Riot ID kamu, contoh: Nama#TAG", required: true, max_length: 40 }]
+      options: [
+        { type: 3, name: "riot_id", description: "Riot ID, contoh: Nama#TAG", required: true, max_length: 40 },
+        { type: 6, name: "member", description: "(Admin) hubungkan akun untuk member lain", required: false }
+      ]
     }).catch(err => console.log(`⚠️ Gagal daftar /link di ${guild.name}:`, err.message));
+
+    await guild.commands.create({
+      name: "leaderboard",
+      description: "Top rank VALORANT member server",
+      dm_permission: false
+    }).catch(err => console.log(`⚠️ Gagal daftar /leaderboard di ${guild.name}:`, err.message));
 
     await guild.commands.create({
       name: "unlink",
@@ -528,9 +538,45 @@ async function checkNextRank() {
 }
 
 client.on("interactionCreate", async (i) => {
-  if (!i.isChatInputCommand() || !["link", "unlink", "rankuptest"].includes(i.commandName)) return;
+  if (!i.isChatInputCommand() || !["link", "unlink", "rankuptest", "leaderboard"].includes(i.commandName)) return;
 
   try {
+    // ===== /leaderboard =====
+    if (i.commandName === "leaderboard") {
+      await i.deferReply();
+
+      const all = Object.entries(loadLinks()).filter(([, l]) => !l.guildId || l.guildId === i.guild.id);
+      const sorted = all
+        .sort(([, a], [, b]) => (b.tier ?? 0) - (a.tier ?? 0) || (b.rr ?? 0) - (a.rr ?? 0))
+        .slice(0, 10);
+
+      const rows = await Promise.all(sorted.map(async ([userId, l]) => {
+        const member = await i.guild.members.fetch(userId).catch(() => null);
+        return {
+          name: member?.displayName || l.name,
+          riotId: `${l.name}#${l.tag}`,
+          avatarUrl: member?.user.displayAvatarURL({ extension: "png", size: 128 }) || null,
+          tier: l.tier ?? 0,
+          rr: l.rr
+        };
+      }));
+
+      const card = await renderLeaderboard({
+        title: `TOP ${i.guild.name.toUpperCase()}`,
+        subtitle: `${all.length} member terhubung • rank diperbarui otomatis`,
+        rows
+      });
+
+      return i.editReply({
+        embeds: [new EmbedBuilder()
+          .setColor(VALO_COLOR)
+          .setDescription(all.length ? "🏆 Peringkat rank VALORANT member server." : "Belum ada member yang `/link`.")
+          .setImage("attachment://leaderboard.png")
+          .setFooter({ text: `Hubungkan akunmu dengan /link • ${FOOTER_TEXT}` })
+          .setTimestamp()],
+        files: [new AttachmentBuilder(card, { name: "leaderboard.png" })]
+      });
+    }
     // ===== /link =====
     if (i.commandName === "link") {
       await i.deferReply({ flags: MessageFlags.Ephemeral });
@@ -541,6 +587,16 @@ client.on("interactionCreate", async (i) => {
       const id = parseRiotId(i.options.getString("riot_id"));
       if (!id) {
         return i.editReply({ embeds: [errorEmbedDante("> Format Riot ID salah. Contoh: `/link riot_id: Nama#TAG`", i.guild)] });
+      }
+
+      // admin boleh link-kan akun member lain
+      const targetUser = i.options.getUser("member") || i.user;
+      const forOther = targetUser.id !== i.user.id;
+      if (forOther && !i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        return i.editReply({ embeds: [errorEmbedDante("> Cuma **ADMIN** yang bisa menghubungkan akun member lain.", i.guild)] });
+      }
+      if (targetUser.bot) {
+        return i.editReply({ embeds: [errorEmbedDante("> Tidak bisa menghubungkan akun ke bot.", i.guild)] });
       }
 
       const account = await henrik(`/valorant/v1/account/${encodeURIComponent(id.name)}/${encodeURIComponent(id.tag)}`);
@@ -557,7 +613,7 @@ client.on("interactionCreate", async (i) => {
       if (now) Object.assign(link, { tier: now.tier, rr: now.rr });
 
       const links = loadLinks();
-      links[i.user.id] = link;
+      links[targetUser.id] = link;
       saveLinks(links);
 
       const icon = link.tier > 2
@@ -567,6 +623,7 @@ client.on("interactionCreate", async (i) => {
         .setColor("#00f1ff")
         .setTitle("🔗 Akun Terhubung")
         .setDescription(
+          (forOther ? `> Member: ${targetUser}\n` : "") +
           `> Riot ID: **${link.name}#${link.tag}**\n` +
           `> Rank sekarang: **${TIER_NAMES[link.tier] || "Unrated"}**${link.rr != null && link.tier > 2 ? ` (${link.rr} RR)` : ""}\n\n` +
           "Kalau rank kamu naik, bot akan otomatis mengumumkannya 🎉"
@@ -1155,95 +1212,4 @@ async function loadAvatar(user) {
 }
 
 async function generateKTP(user, data) {
-  const canvas = createCanvas(800, 450);
-  const ctx = canvas.getContext("2d");
-
-  const bg = await loadImage(path.join(__dirname, "assets/ktp-bg.png"));
-  ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
-
-  ctx.fillStyle = "rgba(0,0,0,0.35)";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  ctx.fillStyle = "#ffffff";
-  ctx.shadowColor = "rgba(0,0,0,0.8)";
-  ctx.shadowBlur = 5;
-
-  // TITLE
-  ctx.textAlign = "center";
-  ctx.font = "26px Roboto";
-  ctx.fillText("KARTU TANDA PENDUDUK", 400, 55);
-
-  ctx.font = "20px Roboto";
-  ctx.fillText("BETLEHEM", 400, 85);
-
-  ctx.textAlign = "left";
-
-  // DATA
-  ctx.font = "18px Roboto";
-
-  const labelX = 90;
-  const colonX = 260;
-  const valueX = 280;
-  const maxValueWidth = 250; // supaya teks panjang tidak menabrak foto
-
-  const startY = 150;
-  const gap = 36;
-
-  const rows = [
-    ["No KTP", data.noKTP],
-    ["Nama", data.nama],
-    ["Jenis Kelamin", data.kelamin],
-    ["Domisili", data.domisili],
-    ["Agama", data.agama],
-    ["Hobi", data.hobi]
-  ];
-
-  rows.forEach(([k, v], i) => {
-    const y = startY + i * gap;
-    ctx.fillText(k, labelX, y);
-    ctx.fillText(":", colonX, y);
-    ctx.fillText(String(v ?? "-"), valueX, y, maxValueWidth);
-  });
-
-  // FOTO (avatar di-crop tengah supaya tidak gepeng)
-  const photoX = 555, photoY = 145, photoW = 145, photoH = 185;
-
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(photoX - 10, photoY - 10, photoW + 20, photoH + 20);
-
-  try {
-    const avatar = await loadAvatar(user);
-    const ratio = photoW / photoH;
-    const sw = avatar.height * ratio;
-    const sx = (avatar.width - sw) / 2;
-    ctx.drawImage(avatar, sx, 0, sw, avatar.height, photoX, photoY, photoW, photoH);
-  } catch {
-    ctx.fillStyle = "#999999";
-    ctx.fillRect(photoX, photoY, photoW, photoH);
-  }
-
-  // TANGGAL PEMBUATAN
-  ctx.fillStyle = "#ffffff";
-  ctx.shadowBlur = 5;
-  ctx.textAlign = "center";
-  ctx.font = "14px Roboto";
-
-  const centerX = photoX + photoW / 2;
-  ctx.fillText("Tanggal Pembuatan", centerX, 360);
-  ctx.fillText(
-    new Date(data.dibuat || Date.now()).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" }),
-    centerX,
-    385
-  );
-
-  return canvas.toBuffer("image/png");
-}
-
-// =======================
-// 🛡️ ANTI CRASH
-// =======================
-process.on("unhandledRejection", err => console.log("Unhandled Rejection:", err));
-process.on("uncaughtException", err => console.log("Uncaught Exception:", err));
-
-client.login(process.env.TOKEN);
+  const canvas = createCanvas
