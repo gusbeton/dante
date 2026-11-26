@@ -681,4 +681,108 @@ async function renderRankUpCard({ name, riotId, avatarUrl, oldTier, newTier, rr 
   return canvas.toBuffer("image/png");
 }
 
-module.exports = { renderScoreboard, computeStats, renderPartyCard, renderRankUpCard, TIER_NAMES };
+// =======================
+// 🏆 LEADERBOARD CARD
+// rows: [{ name, riotId, avatarUrl, tier, rr }] (sudah urut)
+// =======================
+async function renderLeaderboard({ title, subtitle, rows }) {
+  const W4 = 900, HEAD = 130, ROW = 66;
+  const H4 = HEAD + Math.max(rows.length, 1) * ROW + 24;
+  const canvas = createCanvas(W4, H4);
+  const ctx = canvas.getContext("2d");
+  const RED = "#ff4655";
+  const MEDAL = ["#f5c542", "#cfd8dc", "#c08a5a"];
+
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W4, H4);
+
+  // header
+  const grad = ctx.createLinearGradient(0, 0, W4, 0);
+  grad.addColorStop(0, "rgba(255,70,85,0.35)");
+  grad.addColorStop(1, "rgba(255,70,85,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W4, HEAD - 14);
+  ctx.fillStyle = RED;
+  ctx.fillRect(0, 0, 8, HEAD - 14);
+
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+  ctx.fillStyle = RED;
+  ctx.font = `bold 15px ${FONT}`;
+  spacedText(ctx, "VALORANT  •  LEADERBOARD", 36, 40, 3);
+  ctx.fillStyle = C.text;
+  ctx.font = `bold 40px ${FONT}`;
+  ctx.fillText(fitText(ctx, title, W4 - 72), 34, 84);
+  ctx.fillStyle = C.sub;
+  ctx.font = `15px ${FONT}`;
+  ctx.fillText(subtitle || "", 36, 106);
+
+  // preload gambar
+  const imgs = await Promise.all(rows.map(async r => ({
+    av: await getImage(r.avatarUrl),
+    rank: await getImage(rankIcon(r.tier))
+  })));
+
+  if (!rows.length) {
+    ctx.fillStyle = C.sub;
+    ctx.font = `bold 20px ${FONT}`;
+    ctx.fillText("Belum ada member yang /link.", 36, HEAD + 40);
+  }
+
+  rows.forEach((r, idx) => {
+    const y = HEAD + idx * ROW;
+    ctx.fillStyle = idx % 2 ? C.rowB : C.rowA;
+    roundRect(ctx, 20, y + 4, W4 - 40, ROW - 8, 10);
+    ctx.fill();
+
+    // garis medali untuk top 3
+    if (idx < 3) {
+      ctx.fillStyle = MEDAL[idx];
+      ctx.fillRect(20, y + 12, 5, ROW - 24);
+    }
+
+    // nomor
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = idx < 3 ? MEDAL[idx] : C.sub;
+    ctx.font = `bold ${idx < 3 ? 28 : 22}px ${FONT}`;
+    ctx.fillText(String(idx + 1), 62, y + ROW / 2);
+
+    // avatar
+    const { av, rank } = imgs[idx];
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(122, y + ROW / 2, 22, 0, Math.PI * 2);
+    ctx.clip();
+    if (av) ctx.drawImage(av, 100, y + ROW / 2 - 22, 44, 44);
+    else { ctx.fillStyle = "#2a3744"; ctx.fillRect(100, y + ROW / 2 - 22, 44, 44); }
+    ctx.restore();
+
+    // nama + riot id
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = C.text;
+    ctx.font = `bold 20px ${FONT}`;
+    ctx.fillText(fitText(ctx, r.name || "?", 330), 160, y + 30);
+    ctx.fillStyle = C.sub;
+    ctx.font = `14px ${FONT}`;
+    ctx.fillText(fitText(ctx, r.riotId || "", 330), 160, y + 50);
+
+    // rank
+    if (rank) ctx.drawImage(rank, 530, y + ROW / 2 - 20, 40, 40);
+    ctx.fillStyle = r.tier > 2 ? rankColor(r.tier) : C.sub;
+    ctx.font = `bold 19px ${FONT}`;
+    ctx.textBaseline = "middle";
+    ctx.fillText(TIER_NAMES[r.tier] || "Unrated", 582, y + ROW / 2);
+
+    // RR
+    ctx.textAlign = "right";
+    ctx.fillStyle = C.text;
+    ctx.font = `bold 20px ${FONT}`;
+    ctx.fillText(r.tier > 2 && r.rr != null ? `${r.rr} RR` : "-", W4 - 44, y + ROW / 2);
+  });
+
+  return canvas.toBuffer("image/png");
+}
+
+module.exports = { renderScoreboard, computeStats, renderPartyCard, renderRankUpCard, renderLeaderboard, TIER_NAMES };
