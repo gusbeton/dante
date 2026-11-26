@@ -226,10 +226,10 @@ client.once("clientReady", async () => {
       dm_permission: false,
       options: [{
         type: 3, // STRING
-        name: "riot_id",
-        description: "Riot ID, contoh: Nama#TAG",
-        required: true,
-        max_length: 40
+        name: "akun",
+        description: "Riot ID (Nama#TAG) atau tag @member — kosongkan = akun kamu",
+        required: false,
+        max_length: 60
       }]
     }).catch(err => console.log(`⚠️ Gagal daftar /valo di ${guild.name}:`, err.message));
 
@@ -240,10 +240,10 @@ client.once("clientReady", async () => {
       options: [
         {
           type: 3, // STRING
-          name: "riot_id",
-          description: "Riot ID, contoh: Nama#TAG",
-          required: true,
-          max_length: 40
+          name: "akun",
+          description: "Riot ID (Nama#TAG) atau tag @member — kosongkan = akun kamu",
+          required: false,
+          max_length: 60
         },
         {
           type: 3,
@@ -807,6 +807,32 @@ function parseRiotId(input) {
   return name && tag ? { name, tag } : null;
 }
 
+// Isian "akun": Riot ID (Nama#TAG), tag @member, atau kosong = akun sendiri (/link)
+function resolveRiotTarget(i) {
+  const cmd = i.commandName;
+  const typed = (i.options.getString("akun") || "").trim();
+
+  // @member → Discord mengirimnya sebagai <@123456>
+  const mention = typed.match(/^<@!?(\d+)>$/);
+  let userId = mention ? mention[1] : null;
+
+  if (typed && !mention) {
+    return parseRiotId(typed) || {
+      error: `> Format salah. Isi **Riot ID** (\`Nama#TAG\`) atau **tag member** (\`@nama\`).\n> Contoh: \`/${cmd} akun: Nama#TAG\``
+    };
+  }
+
+  userId = userId || i.user.id;
+  const link = loadLinks()[userId];
+  if (link) return { name: link.name, tag: link.tag };
+
+  return {
+    error: userId === i.user.id
+      ? `> Kamu belum menghubungkan akun.\n> Pakai \`/link riot_id: Nama#TAG\` dulu, atau isi Riot ID langsung.`
+      : `> <@${userId}> belum menghubungkan akun VALORANT-nya.\n> Minta dia pakai \`/link\` dulu ya.`
+  };
+}
+
 const pad = (v, n) => {
   const s = String(v);
   return s.length > n ? s.slice(0, n - 1) + "…" : s.padEnd(n);
@@ -930,10 +956,8 @@ client.on("interactionCreate", async (i) => {
       return i.editReply(errorReply("> Fitur tracker belum aktif. **ADMIN** perlu mengisi `HENRIK_API_KEY`."));
     }
 
-    const id = parseRiotId(i.options.getString("riot_id"));
-    if (!id) {
-      return i.editReply(errorReply("> Format Riot ID salah. Contoh: `/match riot_id: Nama#TAG`"));
-    }
+    const id = resolveRiotTarget(i);
+    if (id.error) return i.editReply(errorReply(id.error));
 
     const mode = i.options.getString("mode") || "";
     const key = `match:${id.name}#${id.tag}:${mode}`.toLowerCase();
@@ -974,14 +998,9 @@ client.on("interactionCreate", async (i) => {
       return i.editReply(errorReply("> Fitur tracker belum aktif. **ADMIN** perlu mengisi `HENRIK_API_KEY`."));
     }
 
-    const input = i.options.getString("riot_id").trim();
-    const idx = input.lastIndexOf("#");
-    const name = idx > 0 ? input.slice(0, idx).trim() : "";
-    const tag = idx > 0 ? input.slice(idx + 1).trim() : "";
-
-    if (!name || !tag) {
-      return i.editReply(errorReply("> Format Riot ID salah. Contoh: `/valo riot_id: Nama#TAG`"));
-    }
+    const target = resolveRiotTarget(i);
+    if (target.error) return i.editReply(errorReply(target.error));
+    const { name, tag } = target;
 
     const key = `${name}#${tag}`.toLowerCase();
     const cached = valoCache.get(key);
