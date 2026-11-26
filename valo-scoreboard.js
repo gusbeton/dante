@@ -383,4 +383,181 @@ async function renderScoreboard(match, mePuuid) {
   return canvas.toBuffer("image/png");
 }
 
-module.exports = { renderScoreboard, computeStats };
+// =======================
+// 🎮 PARTY CARD
+// =======================
+const RANK_WORDS = [
+  ["iron", 3], ["bronze", 6], ["silver", 9], ["silver", 9], ["gold", 12], ["plat", 15],
+  ["diamond", 18], ["dia", 18], ["ascendant", 21], ["asc", 21], ["immortal", 24], ["imo", 24],
+  ["immo", 24], ["radiant", 27]
+];
+
+// "Gold - Plat" → [12, 15] (maks 2 ikon)
+function ranksFromText(text) {
+  const found = [];
+  const words = String(text || "").toLowerCase().split(/[^a-z]+/);
+  for (const w of words) {
+    const hit = RANK_WORDS.find(([k]) => w === k || (w.length >= 4 && w.startsWith(k)));
+    if (hit && !found.includes(hit[1])) found.push(hit[1]);
+    if (found.length === 2) break;
+  }
+  return found;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function spacedText(ctx, text, x, y, spacing) {
+  let cx = x;
+  for (const ch of text) {
+    ctx.fillText(ch, cx, y);
+    cx += ctx.measureText(ch).width + spacing;
+  }
+  return cx - spacing - x;
+}
+
+async function renderPartyCard({ code, need, mode, rank, note, name, avatarUrl }) {
+  const W2 = 1000, H2 = 400;
+  const canvas = createCanvas(W2, H2);
+  const ctx = canvas.getContext("2d");
+  const RED = "#ff4655";
+
+  // background
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W2, H2);
+
+  // garis grid tipis
+  ctx.strokeStyle = "rgba(255,255,255,0.03)";
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W2; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H2); ctx.stroke(); }
+  for (let y = 0; y < H2; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W2, y); ctx.stroke(); }
+
+  // panel merah miring di kanan
+  ctx.fillStyle = RED;
+  ctx.beginPath();
+  ctx.moveTo(700, 0); ctx.lineTo(W2, 0); ctx.lineTo(W2, H2); ctx.lineTo(620, H2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "rgba(15,25,35,0.25)";
+  ctx.beginPath();
+  ctx.moveTo(680, 0); ctx.lineTo(700, 0); ctx.lineTo(620, H2); ctx.lineTo(600, H2);
+  ctx.closePath();
+  ctx.fill();
+
+  // aksen garis atas
+  ctx.fillStyle = RED;
+  ctx.fillRect(0, 0, 620, 6);
+
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+
+  // label atas
+  ctx.fillStyle = RED;
+  ctx.font = `bold 15px ${FONT}`;
+  spacedText(ctx, "VALORANT  •  LOOKING FOR PARTY", 40, 44, 2);
+
+  // avatar
+  const av = await getImage(avatarUrl);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(85, 115, 42, 0, Math.PI * 2);
+  ctx.clip();
+  if (av) ctx.drawImage(av, 43, 73, 84, 84);
+  else { ctx.fillStyle = "#2a3744"; ctx.fillRect(43, 73, 84, 84); }
+  ctx.restore();
+  ctx.strokeStyle = RED;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(85, 115, 44, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = C.text;
+  ctx.font = `bold 30px ${FONT}`;
+  ctx.fillText(fitText(ctx, name || "Player", 440), 145, 110);
+  ctx.fillStyle = C.sub;
+  ctx.font = `18px ${FONT}`;
+  ctx.fillText(`mencari party  •  ${mode}`, 145, 140);
+
+  // party code
+  ctx.fillStyle = C.sub;
+  ctx.font = `bold 14px ${FONT}`;
+  spacedText(ctx, "PARTY CODE", 40, 205, 3);
+
+  ctx.font = `bold 92px ${FONT}`;
+  // shadow merah tipis
+  ctx.fillStyle = "rgba(255,70,85,0.35)";
+  spacedText(ctx, code, 44, 294, 14);
+  ctx.fillStyle = C.text;
+  spacedText(ctx, code, 40, 290, 14);
+
+  // rank + catatan (bawah)
+  const tiers = ranksFromText(rank);
+  let rx = 40;
+  for (const t of tiers) {
+    const img = await getImage(rankIcon(t));
+    if (img) { ctx.drawImage(img, rx, 322, 36, 36); rx += 42; }
+  }
+  ctx.fillStyle = C.text;
+  ctx.font = `bold 20px ${FONT}`;
+  const rankText = rank ? `Rank: ${rank}` : "Rank: Bebas";
+  ctx.fillText(fitText(ctx, rankText, 520 - (rx - 40)), rx + (tiers.length ? 6 : 0), 347);
+
+  if (note) {
+    ctx.fillStyle = C.sub;
+    ctx.font = `16px ${FONT}`;
+    ctx.fillText(fitText(ctx, `“${note}”`, 540), 40, 382);
+  }
+
+  // ===== panel kanan: slot =====
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(15,25,35,0.85)";
+  ctx.font = `bold 16px ${FONT}`;
+  ctx.fillText("BUTUH", 835, 95);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `bold 110px ${FONT}`;
+  ctx.fillText(`-${need}`, 835, 210);
+
+  // 5 slot: terisi = putih, kosong = garis
+  const filled = 5 - need;
+  const slotY = 270, slotR = 18, gap = 48, sx = 835 - gap * 2;
+  for (let s = 0; s < 5; s++) {
+    const cx = sx + s * gap;
+    ctx.beginPath();
+    ctx.arc(cx, slotY, slotR, 0, Math.PI * 2);
+    if (s < filled) {
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+  ctx.fillStyle = "rgba(15,25,35,0.85)";
+  ctx.font = `bold 16px ${FONT}`;
+  ctx.fillText(`${filled}/5 PEMAIN`, 835, 322);
+
+  // badge mode
+  ctx.font = `bold 15px ${FONT}`;
+  const bw = ctx.measureText(mode.toUpperCase()).width + 30;
+  roundRect(ctx, 835 - bw / 2, 342, bw, 30, 15);
+  ctx.fillStyle = "#0f1923";
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.textBaseline = "middle";
+  ctx.fillText(mode.toUpperCase(), 835, 357);
+
+  return canvas.toBuffer("image/png");
+}
+
+module.exports = { renderScoreboard, computeStats, renderPartyCard };
