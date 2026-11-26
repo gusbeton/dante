@@ -16,7 +16,7 @@ const {
 } = require("discord.js");
 
 const { createCanvas, loadImage, GlobalFonts } = require("@napi-rs/canvas");
-const { renderScoreboard } = require("./valo-scoreboard");
+const { renderScoreboard, renderPartyCard } = require("./valo-scoreboard");
 
 const {
   joinVoiceChannel,
@@ -255,6 +255,12 @@ client.once("clientReady", async () => {
         }
       ]
     }).catch(err => console.log(`⚠️ Gagal daftar /match di ${guild.name}:`, err.message));
+
+    await guild.commands.create({
+      name: "party",
+      description: "Buat & share party code VALORANT ke channel ini",
+      dm_permission: false
+    }).catch(err => console.log(`⚠️ Gagal daftar /party di ${guild.name}:`, err.message));
   }
 });
 
@@ -392,6 +398,174 @@ async function buildValoProfile(name, tag) {
 
   return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] };
 }
+
+// =======================
+// 🎮 PARTY CODE (/party)
+// =======================
+const PARTY_DURATION = 10 * 60 * 1000; // party otomatis hilang setelah 10 menit
+const parties = new Map();    // messageId → { ownerId, code, timer }
+const partyByUser = new Map(); // userId → messageId (1 user 1 party aktif)
+
+const ephem = embed => ({ embeds: [embed], flags: MessageFlags.Ephemeral });
+const errorEmbedDante = (desc, guild) =>
+  baseEmbed(guild).setColor("#ED4245").setTitle("⚠️ Gagal").setDescription(desc);
+
+const PARTY_MODES = ["Competitive", "Unrated", "Swiftplay", "Premier", "Spike Rush", "Deathmatch", "Custom"];
+
+function partyModal() {
+  const input = (id, label, placeholder, opts = {}) => {
+    const t = new TextInputBuilder()
+      .setCustomId(id)
+      .setLabel(label)
+      .setPlaceholder(placeholder)
+      .setStyle(opts.long ? TextInputStyle.Paragraph : TextInputStyle.Short)
+      .setRequired(!!opts.required)
+      .setMaxLength(opts.max || 40);
+    if (opts.min) t.setMinLength(opts.min);
+    if (opts.value) t.setValue(opts.value);
+    return new ActionRowBuilder().addComponents(t);
+  };
+
+  return new ModalBuilder()
+    .setCustomId("modal_party")
+    .setTitle("🎮 Buat Party VALORANT")
+    .addComponents(
+      input("code", "🔑 Party Code", "Contoh: SKS456", { required: true, min: 4, max: 10 }),
+      input("need", "👥 Butuh Berapa Orang? (1 - 4)", "Contoh: 2", { required: true, max: 2 }),
+      input("mode", "🎮 Mode", "Competitive / Unrated / Swiftplay / Premier", { max: 20, value: "Competitive" }),
+      input("rank", "🏆 Rank yang Dicari", "Contoh: Gold - Plat (kosongkan = bebas)", { max: 40 }),
+      input("note", "📝 Catatan", "Contoh: santai, no toxic, wajib mic", { long: true, max: 150 })
+    );
+}
+
+async function removeParty(messageId, channel) {
+  const party = parties.get(messageId);
+  if (party) {
+    clearTimeout(party.timer);
+    parties.delete(messageId);
+    if (partyByUser.get(party.ownerId) === messageId) partyByUser.delete(party.ownerId);
+  }
+  const msg = await channel?.messages.fetch(messageId).catch(() => null);
+  await msg?.delete().catch(() => {});
+}
+
+client.on("interactionCreate", async (i) => {
+  try {
+    // ===== /party → buka form =====
+    if (i.isChatInputCommand() && i.commandName === "party") {
+      return i.showModal(partyModal());
+    }
+
+    // ===== form dikirim =====
+    if (i.isModalSubmit() && i.customId === "modal_party") {
+      const code = i.fields.getTextInputValue("code").replace(/\s/g, "").toUpperCase();
+      if (!/^[A-Z0-9]{4,10}$/.test(code)) {
+        return i.reply(ephem(errorEmbedDante("> Party code cuma boleh huruf & angka. Contoh: `SKS456`", i.guild)));
+      }
+
+      const need = parseInt(i.fields.getTextInputValue("need").replace(/[^0-9]/g, ""), 10);
+      if (!(need >= 1 && need <= 4)) {
+        return i.reply(ephem(errorEmbedDante("> Jumlah orang yang dibutuhkan harus **1 - 4**.", i.guild)));
+      }
+
+      const modeRaw = i.fields.getTextInputValue("mode").trim();
+      const mode = PARTY_MODES.find(m => m.toLowerCase().startsWith(modeRaw.toLowerCase().slice(0, 4))) ||
+        (modeRaw || "Competitive");
+      const rank = i.fields.getTextInputValue("rank").trim();
+      const catatan = i.fields.getTextInputValue("note").trim();
+
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const vc = i.member.voice?.channel;
+      const expires = Math.floor((Date.now() + PARTY_DURATION) / 1000);
+
+      const card = await renderPartyCard({
+        code,
+        need,
+        mode,
+        rank,
+        note: catatan,
+        name: i.member.displayName,
+        avatarUrl: i.user.displayAvatarURL({ extension: "png", size: 256 })
+      }).catch(err => { console.log("⚠️ Gagal render party:", err.message); return null; });
+
+      const embed = new EmbedBuilder()
+        .setColor(VALO_COLOR)
+        .setAuthor({ name: `${i.member.displayName} mencari party!`, iconURL: i.user.displayAvatarURL() })
+        .setDescription(
+          `🔑 Party Code: \`${code}\`  •  👥 Butuh **-${need}**  •  🎮 **${mode}**\n` +
+          `🏆 Rank: **${rank || "Bebas"}**` +
+          (vc ? `\n🔊 Voice: ${vc}` : "") +
+          (catatan ? `\n📝 ${catatan}` : "") +
+          `\n⏳ Kadaluarsa <t:${expires}:R>`
+        )
+        .setFooter({ text: FOOTER_TEXT })
+        .setTimestamp();
+      if (card) embed.setImage("attachment://party.png");
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("party_copy").setLabel("Salin Kode").setEmoji("📋").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("party_close").setLabel("Party Penuh").setEmoji("✅").setStyle(ButtonStyle.Secondary)
+      );
+      if (vc) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setStyle(ButtonStyle.Link)
+            .setLabel("Join Voice")
+            .setURL(`https://discord.com/channels/${i.guild.id}/${vc.id}`)
+        );
+      }
+
+      // party lama dari user yang sama dihapus dulu
+      const oldId = partyByUser.get(i.user.id);
+      if (oldId) await removeParty(oldId, i.channel);
+
+      const msg = await i.channel.send({
+        content: `🎮 **${i.member.displayName}** butuh **-${need}** buat **${mode}**!`,
+        embeds: [embed],
+        components: [row],
+        files: card ? [new AttachmentBuilder(card, { name: "party.png" })] : []
+      });
+      const timer = setTimeout(() => removeParty(msg.id, msg.channel), PARTY_DURATION);
+      parties.set(msg.id, { ownerId: i.user.id, code, timer });
+      partyByUser.set(i.user.id, msg.id);
+
+      return i.editReply({ embeds: [baseEmbed(i.guild)
+        .setColor("#00f1ff")
+        .setTitle("✅ Party Dikirim")
+        .setDescription(`> Party \`${code}\` sudah diposting dan otomatis hilang <t:${expires}:R>.\n> Tekan **Party Penuh** kalau sudah lengkap.`)] });
+    }
+
+    if (!i.isButton() || !["party_copy", "party_close"].includes(i.customId)) return;
+
+    const party = parties.get(i.message.id);
+
+    // ===== SALIN KODE =====
+    if (i.customId === "party_copy") {
+      const code = party?.code || i.message.embeds[0]?.description?.match(/`([A-Z0-9]{4,10})`/)?.[1];
+      // dikirim sebagai teks biasa supaya gampang di-copy (tahan lama di HP)
+      return i.reply({ content: code || "Kode tidak ditemukan.", flags: MessageFlags.Ephemeral });
+    }
+
+    // ===== PARTY PENUH =====
+    const isOwner = party?.ownerId === i.user.id;
+    const isMod = i.memberPermissions?.has("ManageMessages");
+    if (!isOwner && !isMod) {
+      return i.reply(ephem(errorEmbedDante("> Cuma pembuat party yang bisa menutup party ini.", i.guild)));
+    }
+
+    await i.deferUpdate();
+    await removeParty(i.message.id, i.channel);
+  } catch (err) {
+    console.log("❌ Error party:", err.message);
+    const fail = errorEmbedDante("> Gagal memproses party. Cek izin bot (Send Messages, Embed Links, Attach Files) di channel ini.", i.guild);
+    if (i.deferred) {
+      i.editReply({ embeds: [fail] }).catch(() => {});
+    } else if (i.isRepliable() && !i.replied) {
+      i.reply(ephem(fail)).catch(() => {});
+    }
+  }
+});
 
 // =======================
 // 📋 MATCH SCOREBOARD (/match)
