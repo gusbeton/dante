@@ -560,4 +560,125 @@ async function renderPartyCard({ code, need, mode, rank, note, name, avatarUrl }
   return canvas.toBuffer("image/png");
 }
 
-module.exports = { renderScoreboard, computeStats, renderPartyCard };
+// =======================
+// 🎉 RANK UP CARD
+// =======================
+const rankLarge = tier => `https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/${tier > 2 ? tier : 0}/largeicon.png`;
+
+// warna glow per rank
+function rankColor(tier) {
+  if (tier >= 27) return "#ffe58a"; // radiant
+  if (tier >= 24) return "#ff4d6d"; // immortal
+  if (tier >= 21) return "#2ee6a6"; // ascendant
+  if (tier >= 18) return "#c084fc"; // diamond
+  if (tier >= 15) return "#38d6e8"; // platinum
+  if (tier >= 12) return "#f5c542"; // gold
+  if (tier >= 9) return "#cfd8dc";  // silver
+  if (tier >= 6) return "#c08a5a";  // bronze
+  return "#8d8d8d";                 // iron
+}
+
+async function renderRankUpCard({ name, riotId, avatarUrl, oldTier, newTier, rr }) {
+  const W3 = 1000, H3 = 380;
+  const canvas = createCanvas(W3, H3);
+  const ctx = canvas.getContext("2d");
+  const glow = rankColor(newTier);
+
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W3, H3);
+
+  // cahaya di belakang rank baru
+  const grad = ctx.createRadialGradient(790, 190, 10, 790, 190, 260);
+  grad.addColorStop(0, glow + "66");
+  grad.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W3, H3);
+
+  // sinar
+  ctx.save();
+  ctx.translate(790, 190);
+  ctx.fillStyle = glow + "14";
+  for (let r = 0; r < 12; r++) {
+    ctx.rotate(Math.PI / 6);
+    ctx.beginPath();
+    ctx.moveTo(0, 0); ctx.lineTo(420, -40); ctx.lineTo(420, 40);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // aksen
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W3, 6);
+  ctx.fillRect(0, H3 - 6, W3, 6);
+
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+
+  ctx.fillStyle = glow;
+  ctx.font = `bold 16px ${FONT}`;
+  spacedText(ctx, "VALORANT  •  RANK UP", 40, 50, 3);
+
+  ctx.fillStyle = C.text;
+  ctx.font = `bold 78px ${FONT}`;
+  ctx.fillText("RANK UP!", 36, 135);
+
+  // avatar + nama
+  const av = await getImage(avatarUrl);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(76, 200, 36, 0, Math.PI * 2);
+  ctx.clip();
+  if (av) ctx.drawImage(av, 40, 164, 72, 72);
+  else { ctx.fillStyle = "#2a3744"; ctx.fillRect(40, 164, 72, 72); }
+  ctx.restore();
+  ctx.strokeStyle = glow;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(76, 200, 38, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = C.text;
+  ctx.font = `bold 28px ${FONT}`;
+  ctx.fillText(fitText(ctx, name || "Player", 420), 130, 196);
+  ctx.fillStyle = C.sub;
+  ctx.font = `16px ${FONT}`;
+  ctx.fillText(fitText(ctx, riotId || "", 420), 130, 222);
+
+  // rank lama → rank baru
+  const oldImg = await getImage(rankIcon(oldTier));
+  if (oldImg) {
+    ctx.globalAlpha = 0.55;
+    ctx.drawImage(oldImg, 40, 268, 64, 64);
+    ctx.globalAlpha = 1;
+  }
+  ctx.fillStyle = C.sub;
+  ctx.font = `bold 20px ${FONT}`;
+  ctx.fillText(TIER_NAMES[oldTier] || "Unrated", 114, 308);
+  const ow = ctx.measureText(TIER_NAMES[oldTier] || "Unrated").width;
+
+  ctx.fillStyle = glow;
+  ctx.font = `bold 30px ${FONT}`;
+  ctx.fillText("➜", 114 + ow + 18, 310);
+
+  ctx.font = `bold 26px ${FONT}`;
+  ctx.fillText(TIER_NAMES[newTier] || "?", 114 + ow + 62, 310);
+
+  // ikon rank baru besar
+  const newImg = await getImage(rankLarge(newTier));
+  if (newImg) ctx.drawImage(newImg, 790 - 120, 190 - 130, 240, 240);
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = C.text;
+  ctx.font = `bold 32px ${FONT}`;
+  ctx.fillText((TIER_NAMES[newTier] || "?").toUpperCase(), 790, 340);
+  if (rr != null) {
+    ctx.fillStyle = C.sub;
+    ctx.font = `bold 16px ${FONT}`;
+    ctx.fillText(`${rr} RR`, 790, 364);
+  }
+
+  return canvas.toBuffer("image/png");
+}
+
+module.exports = { renderScoreboard, computeStats, renderPartyCard, renderRankUpCard, TIER_NAMES };
